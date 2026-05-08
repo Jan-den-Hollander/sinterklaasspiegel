@@ -13,7 +13,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 // ── Gemini API (zelfde als andere spiegels) ───────────────────────────────
 const ENV_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_KEY) || '';
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-1.5-flash';
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
