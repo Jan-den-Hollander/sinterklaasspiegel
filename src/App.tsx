@@ -112,7 +112,7 @@ function buildSintFallback(name) {
 
 function buildVerlangFallback(name) {
   return {
-    reacties: [{ wens: 'jouw wens', reactie: `Sint heeft jouw verlanglijstje persoonlijk gelezen, ${name}! Hij schrijft er zorgvuldig in zijn grote boek: "Goede wens, dit kind verdient het!"` }],
+    reacties: [{ wens: 'jouw wens', reactie: `Sint heeft jouw verlanglijstje persoonlijk gelezen, ${name}! Hij schrijft hem zorgvuldig in het grote boek: "Een hele mooie wens,Ik doe mijn best, maar wees niet teleurgesteld als het niet lukt en je iets anders krijgt misschien 🥁👋!"` }],
     slotwoord: `Fijn Sinterklaasfeest, lieve ${name}! Vol verwachting klopt ons hart! 🎁`,
     _isFallback: true,
   };
