@@ -14,6 +14,24 @@ import { motion, AnimatePresence } from 'motion/react';
 // ── Gemini API (zelfde als andere spiegels) ───────────────────────────────
 const ENV_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_KEY) || '';
 const GEMINI_MODEL = 'gemini-1.5-flash';
+// Sleutelnamen die andere spiegels kunnen gebruiken — probeer ze allemaal
+const KEY_NAMES = ['gemini_api_key', 'magic_mirror_key', 'sint_gemini_key', 'italian_mirror_key', 'shadow_app_key'];
+function loadStoredKey() {
+  if (ENV_KEY) return ENV_KEY;
+  try {
+    for (const name of KEY_NAMES) {
+      const k = localStorage.getItem(name);
+      if (k && k.startsWith('AIza')) return k;
+    }
+  } catch {}
+  return '';
+}
+function saveStoredKey(k) {
+  try {
+    // Sla op onder alle bekende namen zodat alle spiegels hem vinden
+    for (const name of KEY_NAMES) localStorage.setItem(name, k);
+  } catch {}
+}
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
@@ -37,6 +55,7 @@ async function fetchWithRetry(fn, maxAttempts = 3) {
 }
 
 async function callGemini(apiKey, prompt) {
+  if (!apiKey || !apiKey.startsWith('AIza')) throw new Error('Geen geldige sleutel');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
   const resp = await fetchWithRetry(() =>
     fetch(url, {
@@ -46,7 +65,11 @@ async function callGemini(apiKey, prompt) {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.8, maxOutputTokens: 1000 },
       }),
-    }).then(r => r.json())
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw new Error(json?.error?.message || `HTTP ${r.status}`);
+      return json;
+    })
   );
   if (resp.error) throw new Error(resp.error.message || 'Gemini fout');
   const raw = resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
@@ -535,7 +558,8 @@ function RijmMode({ apiKey, onBack }) {
       setResult(data); setSpeaking(true);
       speak((data.intro||'')+' '+(data.rijm||''), ()=>setSpeaking(false));
     } catch (e) {
-      setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
+      if (e.message?.includes('sleutel')) setErr('Geen geldige API sleutel. Tik op "Gemini sleutel" hieronder! 🔑');
+      else setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
     }
     setLoading(false);
   };
@@ -594,8 +618,9 @@ function VerlangMode({ apiKey, onBack }) {
       const raw = await callGemini(apiKey, buildVerlangPrompt(name, wishes));
       const data = JSON.parse(raw);
       setResult(data);
-    } catch {
-      setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
+    } catch (e) {
+      if (e.message?.includes('sleutel')) setErr('Geen geldige API sleutel. Tik op "Gemini sleutel" hieronder! 🔑');
+      else setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
     }
     setLoading(false);
   };
@@ -650,8 +675,9 @@ function SchoenMode({ apiKey, onBack }) {
       const data = JSON.parse(raw);
       setResult(data); setSpeaking(true);
       speak(data.bericht||'', ()=>setSpeaking(false));
-    } catch {
-      setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
+    } catch (e) {
+      if (e.message?.includes('sleutel')) setErr('Geen geldige API sleutel. Tik op "Gemini sleutel" hieronder! 🔑');
+      else setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
     }
     setLoading(false);
   };
@@ -755,10 +781,7 @@ export default function SinterklasSpiegel() {
   const [mode, setMode] = useState(MODE.HOME);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
-  const [apiKey, setApiKey] = useState(() => {
-    if (ENV_KEY) return ENV_KEY;
-    try { return localStorage.getItem('sint_gemini_key') || ''; } catch { return ''; }
-  });
+  const [apiKey, setApiKey] = useState(() => loadStoredKey());
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -783,7 +806,7 @@ export default function SinterklasSpiegel() {
 
   const saveKey = (k) => {
     setApiKey(k);
-    try { localStorage.setItem('sint_gemini_key', k); } catch {}
+    saveStoredKey(k);
     setShowKeyModal(false);
   };
 
