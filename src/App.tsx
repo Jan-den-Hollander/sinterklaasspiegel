@@ -1,32 +1,59 @@
 /**
- * Sinterklaas Spiegel — v3
- * - Mijter: GEEL/GOUD met rode vakken, correct zoals de foto's
- * - Medaillon: cirkel-logo stijl (afbeelding 3) — donkerrood cirkel met gele mijter erin
- * - Rand: rijker — slingers, blaadjes, sterren die over de binnenrand hangen
- * - Staven onder vervangen door 📖 en 🥁
- * - Quiz: 👑📚 Sint-stijl, geen kerstman
- * - Sint prompt: geen "ho ho ho"
- * - API-key: link naar console.anthropic.com
+ * Sinterklaas Spiegel — v4
+ * - Gemini API (zoals Magische Spiegel, Zauberspiegel, Magic Mirror)
+ * - Quiz antwoorden geshuffeld — correct antwoord niet altijd op A
+ * - Mijter: geel/goud met rode panelen (correct)
+ * - Medaillon: cirkel-logo stijl
+ * - Rand: slingers, blaadjes over binnenrand, 📖 🥁 ornament
+ * - "Vol verwachting klopt ons hart" — geen ho ho ho
+ * - API-key: link naar aistudio.google.com
  */
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 
-const ENV_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ANTHROPIC_KEY) || '';
+// ── Gemini API (zelfde als andere spiegels) ───────────────────────────────
+const ENV_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_KEY) || '';
+const GEMINI_MODEL = 'gemini-2.0-flash';
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
 async function fetchWithRetry(fn, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await Promise.race([fn(), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 20000))]);
+      return await Promise.race([
+        fn(),
+        new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 20000))
+      ]);
     } catch (err) {
       const isLast = attempt === maxAttempts;
-      const retry = err?.message?.includes('timeout') || err?.message?.includes('503') || err?.message?.includes('overloaded');
+      const retry = err?.message?.includes('timeout') ||
+                    err?.message?.includes('503') ||
+                    err?.message?.includes('overloaded') ||
+                    err?.message?.includes('429');
       if (isLast || !retry) throw err;
       await sleep(attempt * 1500);
     }
   }
 }
 
+async function callGemini(apiKey, prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const resp = await fetchWithRetry(() =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.8, maxOutputTokens: 1000 },
+      }),
+    }).then(r => r.json())
+  );
+  if (resp.error) throw new Error(resp.error.message || 'Gemini fout');
+  const raw = resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  return raw.replace(/```json|```/g, '').trim();
+}
+
+// ── TTS ───────────────────────────────────────────────────────────────────
 const getVoices = () => new Promise(resolve => {
   const v = window.speechSynthesis.getVoices();
   if (v.length) { resolve(v); return; }
@@ -48,6 +75,7 @@ async function speak(text, onEnd = () => {}) {
   setTimeout(() => { try { window.speechSynthesis.cancel(); } catch {} }, text.length * 75 + 4000);
 }
 
+// ── Countdown ─────────────────────────────────────────────────────────────
 function getCountdown() {
   const now = new Date(), year = now.getFullYear();
   let d = new Date(year, 11, 5, 18, 0, 0);
@@ -62,158 +90,101 @@ function getCountdown() {
   };
 }
 
-const QUIZ = [
-  { q: 'Hoe heet het paard van Sinterklaas?', answers: ['Amerigo', 'Tornado', 'Blixem', 'Domino'], correct: 0 },
-  { q: 'Uit welk land komt Sinterklaas op de boot?', answers: ['Spanje', 'Italië', 'Portugal', 'Griekenland'], correct: 0 },
-  { q: 'Op welke datum is Pakjesavond?', answers: ['5 december', '6 december', '25 december', '1 december'], correct: 0 },
-  { q: 'Wat leg je in je schoen voor Sint?', answers: ['Een wortel voor het paard', 'Een appel', 'Een snoepje', 'Een koekje'], correct: 0 },
-  { q: 'Hoe heet het boek van Sinterklaas?', answers: ['Het grote boek', 'Het gouden boek', 'Het rode boek', 'Het dikke boek'], correct: 0 },
+// ── Quiz — antwoorden worden geshuffeld bij laden ─────────────────────────
+const RAW_QUIZ = [
+  { q: 'Hoe heet het paard van Sinterklaas?',       correct: 'Amerigo',          wrong: ['Tornado', 'Blixem', 'Domino'] },
+  { q: 'Uit welk land komt Sinterklaas op de boot?', correct: 'Spanje',           wrong: ['Italië', 'Portugal', 'Griekenland'] },
+  { q: 'Op welke datum is Pakjesavond?',             correct: '5 december',       wrong: ['6 december', '25 december', '1 december'] },
+  { q: 'Wat leg je in je schoen voor Sint?',         correct: 'Een wortel voor het paard', wrong: ['Een appel', 'Een snoepje', 'Een koekje'] },
+  { q: 'Hoe heet het boek van Sinterklaas?',         correct: 'Het grote boek',   wrong: ['Het gouden boek', 'Het rode boek', 'Het dikke boek'] },
 ];
+
+function shuffleQuiz() {
+  return RAW_QUIZ.map(q => {
+    const all = [q.correct, ...q.wrong];
+    // Fisher-Yates shuffle
+    for (let i = all.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    return { q: q.q, answers: all, correct: all.indexOf(q.correct) };
+  });
+}
 
 const MODE = { HOME: 'home', RIJM: 'rijm', VERLANG: 'verlang', SCHOEN: 'schoen', QUIZ: 'quiz', TELLER: 'teller' };
 
+// ── Prompts ───────────────────────────────────────────────────────────────
 const buildRijmPrompt = (name, age, wish) =>
   `Je bent Sinterklaas zelf — waardig, hartelijk, met humor voor kinderen. Schrijf een persoonlijk Sinterklaas-rijmpje voor ${name} (${age} jaar) die graag ${wish} wil.
 Stijl: klassiek AABB rijmschema, 8 regels, kindvriendelijk. Gebruik NOOIT "ho ho ho".
 Eindig met een plechtige zin zoals "Fijn Sinterklaasfeest, lieve ${name}!"
-Antwoord ALLEEN als JSON zonder markdown:
+Antwoord ALLEEN als JSON zonder markdown of uitleg:
 {"rijm":"regel1\\nregel2\\nregel3\\nregel4\\nregel5\\nregel6\\nregel7\\nregel8","intro":"Een kort welkomstwoord van Sint (1 zin, persoonlijk, geen ho ho ho)"}`;
 
 const buildVerlangPrompt = (name, wishes) =>
   `Je bent Sinterklaas. ${name} heeft de volgende wensen: ${wishes}.
-Reageer op elk item met een korte, grappige reactie. Gebruik NOOIT "ho ho ho".
-Antwoord ALLEEN als JSON zonder markdown:
+Reageer op elk item met een korte grappige reactie van Sint. Gebruik NOOIT "ho ho ho".
+Antwoord ALLEEN als JSON zonder markdown of uitleg:
 {"reacties":[{"wens":"...","reactie":"..."}],"slotwoord":"..."}`;
 
 const buildSchoenPrompt = (name, items) =>
   `Je bent Sinterklaas. ${name} heeft het volgende in het schoentje gelegd: ${items}.
 Reageer warm, grappig en kindvriendelijk. Gebruik NOOIT "ho ho ho".
-Antwoord ALLEEN als JSON zonder markdown:
-{"bericht":"... (2-3 zinnen, persoonlijk)","gekregen":"wat het kind misschien krijgt (raadselachtig, 1 zin)"}`;
+Antwoord ALLEEN als JSON zonder markdown of uitleg:
+{"bericht":"2-3 zinnen persoonlijk en grappig","gekregen":"wat het kind misschien krijgt, raadselachtig omschreven in 1 zin"}`;
 
-// ═══════════════════════════════════════════════════════
-// MIJTER SVG — GEEL/GOUD met rode panelen, zoals de foto
-// Centraal kruis met rode edelstenen
-// ═══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// SVG COMPONENTEN
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Mijter: GEEL/GOUD met rode panelen, Y-kruis, edelstenen ──────────────
 function MijterSVG({ size = 44 }) {
-  const w = size, h = size * 1.3;
   return (
-    <svg width={w} height={h} viewBox="0 0 100 130"
+    <svg width={size} height={size * 1.3} viewBox="0 0 100 130"
       style={{ display: 'block', filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.55))' }}>
       <defs>
-        <linearGradient id="mYel" x1="0%" y1="0%" x2="100%" y2="100%">
+        <linearGradient id="mY1" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stopColor="#ffe566" />
-          <stop offset="40%" stopColor="#d4a017" />
+          <stop offset="45%" stopColor="#d4a017" />
           <stop offset="100%" stopColor="#b8860b" />
         </linearGradient>
-        <linearGradient id="mYel2" x1="100%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id="mY2" x1="100%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor="#fff0a0" />
           <stop offset="100%" stopColor="#c49a0c" />
         </linearGradient>
-        <linearGradient id="mRed" x1="0%" y1="0%" x2="100%" y2="100%">
+        <linearGradient id="mRd" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stopColor="#c8001e" />
           <stop offset="100%" stopColor="#8b0010" />
         </linearGradient>
-        <filter id="mSh">
-          <feDropShadow dx="1" dy="2" stdDeviation="2" floodColor="#3a1a00" floodOpacity="0.45"/>
-        </filter>
       </defs>
-
-      {/* ── Gele basis linker vleugel ── */}
-      <path d="M18 100 C14 78 6 52 10 24 C14 8 28 0 50 0 C34 14 26 42 22 100Z"
-        fill="url(#mYel)" filter="url(#mSh)" />
-      {/* ── Gele basis rechter vleugel ── */}
-      <path d="M82 100 C86 78 94 52 90 24 C86 8 72 0 50 0 C66 14 74 42 78 100Z"
-        fill="url(#mYel2)" filter="url(#mSh)" />
-
-      {/* ── Rode panelen links boven ── */}
-      <path d="M22 98 C20 76 16 54 20 32 C24 18 34 8 50 2 C38 14 30 36 28 98Z"
-        fill="url(#mRed)" opacity="0.88" />
-      {/* ── Rode panelen rechts boven ── */}
-      <path d="M78 98 C80 76 84 54 80 32 C76 18 66 8 50 2 C62 14 70 36 72 98Z"
-        fill="url(#mRed)" opacity="0.75" />
-
-      {/* ── Gouden kruis OVER de rode panelen ── */}
-      {/* Horizontale balk */}
-      <rect x="20" y="52" width="60" height="12" rx="4" fill="url(#mYel)" />
-      {/* Verticale balk */}
-      <rect x="44" y="16" width="12" height="76" rx="4" fill="url(#mYel)" />
-
-      {/* ── Rode edelstenen op het kruis ── */}
-      {/* Midden groot */}
+      {/* Gele vleugels */}
+      <path d="M18 100 C14 78 6 52 10 24 C14 8 28 0 50 0 C34 14 26 42 22 100Z" fill="url(#mY1)" />
+      <path d="M82 100 C86 78 94 52 90 24 C86 8 72 0 50 0 C66 14 74 42 78 100Z" fill="url(#mY2)" />
+      {/* Rode panelen */}
+      <path d="M22 98 C20 76 16 54 20 32 C24 18 34 8 50 2 C38 14 30 36 28 98Z" fill="url(#mRd)" opacity="0.85" />
+      <path d="M78 98 C80 76 84 54 80 32 C76 18 66 8 50 2 C62 14 70 36 72 98Z" fill="url(#mRd)" opacity="0.72" />
+      {/* Gouden Y-kruis */}
+      <rect x="20" y="52" width="60" height="12" rx="4" fill="url(#mY1)" />
+      <rect x="44" y="16" width="12" height="76" rx="4" fill="url(#mY1)" />
+      {/* Edelstenen */}
       <circle cx="50" cy="60" r="7" fill="#c8001e" stroke="#ffe566" strokeWidth="2" />
-      <circle cx="50" cy="60" r="4.5" fill="#ff3355" opacity="0.65" />
-      {/* Boven */}
+      <circle cx="50" cy="60" r="4" fill="#ff3355" opacity="0.6" />
       <circle cx="50" cy="38" r="4" fill="#c8001e" stroke="#ffe566" strokeWidth="1.5" />
       <circle cx="50" cy="25" r="3" fill="#c8001e" stroke="#ffe566" strokeWidth="1.2" />
-      {/* Links */}
       <circle cx="30" cy="58" r="3.5" fill="#c8001e" stroke="#ffe566" strokeWidth="1.5" />
-      {/* Rechts */}
       <circle cx="70" cy="58" r="3.5" fill="#c8001e" stroke="#ffe566" strokeWidth="1.5" />
-      {/* Onder op kruis */}
       <circle cx="50" cy="76" r="3" fill="#c8001e" stroke="#ffe566" strokeWidth="1.2" />
-
-      {/* ── Gouden band onderaan ── */}
-      <rect x="8" y="100" width="84" height="14" rx="5" fill="url(#mYel)" />
-      {/* Rode onderbanden (de linten) */}
-      <path d="M22 114 L16 130 L24 130 L28 114Z" fill="url(#mRed)" />
-      <path d="M78 114 L84 130 L76 130 L72 114Z" fill="url(#mRed)" />
-      {/* Goud op band */}
-      <rect x="8" y="100" width="84" height="4" rx="2" fill="#fff0a0" opacity="0.45" />
-
-      {/* Glinstering top */}
+      {/* Gouden band + rode linten */}
+      <rect x="8" y="100" width="84" height="14" rx="5" fill="url(#mY1)" />
+      <path d="M22 114 L16 130 L24 130 L28 114Z" fill="url(#mRd)" />
+      <path d="M78 114 L84 130 L76 130 L72 114Z" fill="url(#mRd)" />
+      <rect x="8" y="100" width="84" height="4" rx="2" fill="#fff0a0" opacity="0.4" />
       <circle cx="50" cy="4" r="3" fill="#fff8c0" opacity="0.8" />
     </svg>
   );
 }
 
-// ═══════════════════════════════════════════════════════
-// MEDAILLON — Cirkel-logo stijl (afbeelding 3)
-// Donkerrood met gele mijter silhouet erin
-// ═══════════════════════════════════════════════════════
-function MedaillonSVG({ r = 26 }) {
-  const d = r * 2;
-  return (
-    <svg width={d} height={d} viewBox="0 0 100 100"
-      style={{ display: 'block', filter: 'drop-shadow(0 0 6px rgba(212,160,23,0.7))' }}>
-      <defs>
-        <linearGradient id="cGold" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#ffe566" />
-          <stop offset="50%" stopColor="#d4a017" />
-          <stop offset="100%" stopColor="#b8860b" />
-        </linearGradient>
-        <radialGradient id="cBg" cx="40%" cy="35%" r="65%">
-          <stop offset="0%" stopColor="#8b0010" />
-          <stop offset="100%" stopColor="#4a0006" />
-        </radialGradient>
-      </defs>
-      {/* Gouden buitenring */}
-      <circle cx="50" cy="50" r="50" fill="url(#cGold)" />
-      {/* Donkerrode cirkel binnenin */}
-      <circle cx="50" cy="50" r="43" fill="url(#cBg)" />
-
-      {/* Mijter silhouet — geel, zoals afbeelding 3 */}
-      {/* Linker vleugel */}
-      <path d="M20 78 C17 62 12 42 16 22 C19 10 30 4 50 4 C38 14 30 34 26 78Z"
-        fill="url(#cGold)" />
-      {/* Rechter vleugel */}
-      <path d="M80 78 C83 62 88 42 84 22 C81 10 70 4 50 4 C62 14 70 34 74 78Z"
-        fill="url(#cGold)" />
-      {/* Gouden kruis */}
-      <rect x="22" y="42" width="56" height="10" rx="3" fill="#8b0010" />
-      <rect x="45" y="10" width="10" height="62" rx="3" fill="#8b0010" />
-      {/* Gouden band onderaan mijter */}
-      <rect x="14" y="78" width="72" height="10" rx="4" fill="url(#cGold)" />
-      {/* Rode linten */}
-      <path d="M22 88 L17 98 L25 98Z" fill="#c8001e" />
-      <path d="M78 88 L83 98 L75 98Z" fill="#c8001e" />
-    </svg>
-  );
-}
-
-// ═══════════════════════════════════════════════════════
-// SINT FRAME — Rijkere rand met slingers, blaadjes
-// ═══════════════════════════════════════════════════════
+// ── Sint Frame met rijke rand ─────────────────────────────────────────────
 function SintFrame({ W = 270, H = 330 }) {
   const cx = W / 2, cy = H / 2;
   const rx = cx - 10, ry = cy - 10;
@@ -223,24 +194,14 @@ function SintFrame({ W = 270, H = 330 }) {
     return [cx + orx * Math.cos(a), cy + ory * Math.sin(a)];
   }
 
-  // Slinger punten — zigzag binnenste rand
+  // Slinger pad — zigzag langs binnenkant rand
   const slingerPts = Array.from({ length: 73 }, (_, i) => {
     const ang = i * 5;
-    const wave = (i % 2 === 0) ? 6 : -4; // zigzag
-    const [x, y] = ptE(ang, rx - 4 + wave, ry - 4 + wave);
+    const wave = (i % 2 === 0) ? 5 : -3;
+    const [x, y] = ptE(ang, rx - 5 + wave, ry - 5 + wave);
     return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
   });
 
-  // Bladjes langs de rand — wisselend binnen/buiten
-  const BLADJES = Array.from({ length: 36 }, (_, i) => ({
-    a: i * 10,
-    off: (i % 3 === 0) ? 14 : (i % 3 === 1) ? 6 : -2,
-    size: (i % 4 === 0) ? 13 : 10,
-    rot: i * 28,
-    type: i % 5, // 0=ster, 1=blaadje, 2=bes, 3=sint-item, 4=blaadje2
-  }));
-
-  // Hoofd krans
   const KRANS = [
     { a: 0,   e: '⭐', fs: 21, off: 13 },
     { a: 13,  e: '🍊', fs: 16, off: 5  },
@@ -272,7 +233,7 @@ function SintFrame({ W = 270, H = 330 }) {
     { a: 351, e: '🧸', fs: 15, off: 4  },
   ];
 
-  // Extra decoraties die OVER de binnenrand hangen (negatieve offset = binnen de ellips)
+  // Blaadjes + sinaasappels die over de binnenrand hangen
   const OVERHANGERS = [
     { a: 22,  e: '🍃', fs: 11, off: -8  },
     { a: 55,  e: '🌿', fs: 10, off: -6  },
@@ -284,7 +245,6 @@ function SintFrame({ W = 270, H = 330 }) {
     { a: 255, e: '🌿', fs: 10, off: -5  },
     { a: 290, e: '🍃', fs: 11, off: -8  },
     { a: 325, e: '🌿', fs: 10, off: -7  },
-    // Sinaasappels die ook iets over de rand hangen
     { a: 38,  e: '🍊', fs: 12, off: -4  },
     { a: 108, e: '🍊', fs: 11, off: -5  },
     { a: 200, e: '🍊', fs: 12, off: -4  },
@@ -319,22 +279,22 @@ function SintFrame({ W = 270, H = 330 }) {
         </filter>
       </defs>
 
-      {/* ── Rode mantel-sfeer ring ── */}
+      {/* Rode mantelsfeer */}
       <ellipse cx={cx} cy={cy} rx={rx+7} ry={ry+7}
         fill="none" stroke="rgba(120,0,12,0.18)" strokeWidth="18"/>
 
-      {/* ── Gouden slinger langs de binnenkant van de rand ── */}
+      {/* Gouden slinger langs binnenkant */}
       <path d={slingerPts.join(' ') + 'Z'} fill="none"
-        stroke="rgba(212,160,23,0.35)" strokeWidth="3"
+        stroke="rgba(212,160,23,0.32)" strokeWidth="3"
         strokeDasharray="6 4" strokeLinecap="round"/>
 
-      {/* ── Gouden hoofdrand ── */}
+      {/* Gouden hoofdrand */}
       <ellipse cx={cx} cy={cy} rx={rx} ry={ry}
         fill="none" stroke="url(#fG1)" strokeWidth="7"/>
       <ellipse cx={cx} cy={cy} rx={rx-10} ry={ry-10}
         fill="none" stroke="url(#fG2)" strokeWidth="1.5" opacity="0.45"/>
 
-      {/* ── Hoofd krans (buitenste) ── */}
+      {/* Krans buiten */}
       {KRANS.map((p, i) => {
         const [px, py] = ptE(p.a, rx + p.off, ry + p.off);
         return (
@@ -344,7 +304,7 @@ function SintFrame({ W = 270, H = 330 }) {
         );
       })}
 
-      {/* ── Overhangers — blaadjes die OVER de binnenrand hangen ── */}
+      {/* Overhangers — hangen over binnenrand */}
       {OVERHANGERS.map((p, i) => {
         const [px, py] = ptE(p.a, rx + p.off, ry + p.off);
         return (
@@ -354,52 +314,44 @@ function SintFrame({ W = 270, H = 330 }) {
         );
       })}
 
-      {/* ── Medaillon bovenaan — cirkel-logo stijl ── */}
-      {/* Gouden achtergrondcirkel (gloed) */}
-      <circle cx={cx} cy={16} r={30} fill="url(#fG1)" filter="url(#fGlow)"/>
-      {/* Donkerrode cirkel */}
-      <circle cx={cx} cy={16} r={26} fill="#6a0008"/>
-      {/* Interne rode gloed */}
-      <circle cx={cx} cy={16} r={24} fill="rgba(100,0,8,0.6)"/>
+      {/* Extra ✦ sterretjes */}
+      {[30,60,120,150,210,240,300,330].map((ang, i) => {
+        const [ex, ey] = ptE(ang, rx+22, ry+22);
+        return <text key={`s${i}`} x={ex} y={ey} fontSize="8" textAnchor="middle"
+          dominantBaseline="middle" fill="#ffe566" opacity="0.5"
+          style={{ userSelect:'none' }}>✦</text>;
+      })}
 
-      {/* Mijter silhouet in medaillon — geel zoals afbeelding 3 */}
-      {/* Linker vleugel */}
-      <path d={`M${cx-11} 34 C${cx-13} 26 ${cx-16} 17 ${cx-12} 9 C${cx-10} 4 ${cx-5} 2 ${cx} 2 C${cx-5} 7 ${cx-8} 16 ${cx-10} 34Z`}
-        fill="url(#fG1)"/>
-      {/* Rechter vleugel */}
-      <path d={`M${cx+11} 34 C${cx+13} 26 ${cx+16} 17 ${cx+12} 9 C${cx+10} 4 ${cx+5} 2 ${cx} 2 C${cx+5} 7 ${cx+8} 16 ${cx+10} 34Z`}
-        fill="#d4a017"/>
-      {/* Gouden kruis in medaillon */}
+      {/* Medaillon bovenaan — cirkel logo stijl */}
+      <circle cx={cx} cy={16} r={30} fill="url(#fG1)" filter="url(#fGlow)"/>
+      <circle cx={cx} cy={16} r={26} fill="#6a0008"/>
+      <circle cx={cx} cy={16} r={24} fill="rgba(100,0,8,0.5)"/>
+      {/* Gele mijter silhouet in medaillon */}
+      <path d={`M${cx-11} 34 C${cx-13} 26 ${cx-16} 17 ${cx-12} 9 C${cx-10} 4 ${cx-5} 2 ${cx} 2 C${cx-5} 7 ${cx-8} 16 ${cx-10} 34Z`} fill="url(#fG1)"/>
+      <path d={`M${cx+11} 34 C${cx+13} 26 ${cx+16} 17 ${cx+12} 9 C${cx+10} 4 ${cx+5} 2 ${cx} 2 C${cx+5} 7 ${cx+8} 16 ${cx+10} 34Z`} fill="#d4a017"/>
       <rect x={cx-9} y={17} width="18" height="5" rx="2" fill="#5a0006"/>
       <rect x={cx-2.5} y={5} width="5" height="26" rx="2" fill="#5a0006"/>
-      {/* Gouden band */}
       <rect x={cx-12} y={33} width="24" height="5" rx="2" fill="url(#fG1)"/>
-
       {/* Verbindingslijn */}
-      <line x1={cx} y1={46} x2={cx} y2={cy-ry}
-        stroke="url(#fG1)" strokeWidth="2.5" opacity="0.72"/>
+      <line x1={cx} y1={46} x2={cx} y2={cy-ry} stroke="url(#fG1)" strokeWidth="2.5" opacity="0.72"/>
       <circle cx={cx} cy={47} r={3.5} fill="url(#fG1)"/>
 
-      {/* ── Staven ornament — 📖 links, 🥁 rechts ── */}
-      {/* Staf links */}
-      <g transform={`translate(${cx-66},${H-86})`}>
-        <line x1="12" y1="20" x2="12" y2="58" stroke="url(#fG1)" strokeWidth="5" strokeLinecap="round"/>
-        <path d="M12 20 C12 6 22 2 22 10 C22 18 14 20 11 16"
-          fill="none" stroke="url(#fG1)" strokeWidth="5" strokeLinecap="round"/>
-        <circle cx="22" cy="10" r="4" fill="#d4a017" stroke="#ffe566" strokeWidth="1.5"/>
-      </g>
-      {/* Gespiegelde staf rechts */}
-      <g transform={`translate(${cx+66},${H-86}) scale(-1,1)`}>
-        <line x1="12" y1="20" x2="12" y2="58" stroke="url(#fG1)" strokeWidth="5" strokeLinecap="round"/>
-        <path d="M12 20 C12 6 22 2 22 10 C22 18 14 20 11 16"
-          fill="none" stroke="url(#fG1)" strokeWidth="5" strokeLinecap="round"/>
-        <circle cx="22" cy="10" r="4" fill="#d4a017" stroke="#ffe566" strokeWidth="1.5"/>
-      </g>
+      {/* Staven ornament L+R */}
+      {[false, true].map((flip, fi) => {
+        const bx = flip ? cx+66 : cx-66;
+        return (
+          <g key={fi} transform={`translate(${bx},${H-86}) ${flip ? 'scale(-1,1)' : ''}`}>
+            <line x1="12" y1="20" x2="12" y2="58" stroke="url(#fG1)" strokeWidth="5" strokeLinecap="round"/>
+            <path d="M12 20 C12 6 22 2 22 10 C22 18 14 20 11 16"
+              fill="none" stroke="url(#fG1)" strokeWidth="5" strokeLinecap="round"/>
+            <circle cx="22" cy="10" r="4" fill="#d4a017" stroke="#ffe566" strokeWidth="1.5"/>
+          </g>
+        );
+      })}
 
-      {/* 📖 Boek ornament links */}
+      {/* 📖 en 🥁 ornament */}
       <text x={cx-54} y={H-24} fontSize="16" textAnchor="middle"
         dominantBaseline="middle" filter="url(#fSh)" style={{ userSelect:'none' }}>📖</text>
-      {/* 🥁 Trommel ornament rechts */}
       <text x={cx+54} y={H-24} fontSize="16" textAnchor="middle"
         dominantBaseline="middle" filter="url(#fSh)" style={{ userSelect:'none' }}>🥁</text>
 
@@ -407,27 +359,17 @@ function SintFrame({ W = 270, H = 330 }) {
       <path d={`M${cx-52} ${H-16} Q${cx} ${H-2} ${cx+52} ${H-16}`}
         fill="none" stroke="url(#fG1)" strokeWidth="2.5"/>
       <circle cx={cx} cy={H-2} r={5.5} fill="url(#fG1)"/>
-      {[-30, 30].map((dx, i) =>
+      {[-30,30].map((dx, i) =>
         <circle key={i} cx={cx+dx} cy={H-12} r={3.5} fill="#d4a017" opacity="0.78"/>)}
 
-      {/* Rode sierbolletjes op de kaardinaalspunten */}
-      {[0, 90, 180, 270].map((ang, i) => {
+      {/* Rode bolletjes op kaardinaalspunten */}
+      {[0,90,180,270].map((ang, i) => {
         const [ex, ey] = ptE(ang, rx+18, ry+18);
         return (
           <g key={i}>
             <circle cx={ex} cy={ey} r={5.5} fill="url(#fRed)" stroke="#d4a017" strokeWidth="1.5"/>
             <circle cx={ex} cy={ey} r={2.5} fill="#ff5070" opacity="0.6"/>
           </g>
-        );
-      })}
-
-      {/* Extra kleine sterretjes langs de rand */}
-      {[30, 60, 120, 150, 210, 240, 300, 330].map((ang, i) => {
-        const [ex, ey] = ptE(ang, rx+22, ry+22);
-        return (
-          <text key={`s${i}`} x={ex} y={ey} fontSize="8" textAnchor="middle"
-            dominantBaseline="middle" fill="#ffe566" opacity="0.55"
-            style={{ userSelect:'none' }}>✦</text>
         );
       })}
     </svg>
@@ -505,43 +447,48 @@ function CountdownDisplay() {
   );
 }
 
-// ── Quiz ──────────────────────────────────────────────────────────────────
+// ── Quiz — elke keer geshuffeld ───────────────────────────────────────────
 function QuizMode({ onBack }) {
+  const [quiz] = useState(() => shuffleQuiz());
   const [qi, setQi] = useState(0);
   const [score, setScore] = useState(0);
   const [chosen, setChosen] = useState(null);
   const [done, setDone] = useState(false);
-  const q = QUIZ[qi];
+  const q = quiz[qi];
+
   const pick = (i) => {
     if (chosen !== null) return;
     setChosen(i);
     if (i === q.correct) setScore(s => s+1);
-    setTimeout(() => { if (qi+1 < QUIZ.length) { setQi(qi+1); setChosen(null); } else setDone(true); }, 1300);
+    setTimeout(() => {
+      if (qi+1 < quiz.length) { setQi(qi+1); setChosen(null); }
+      else setDone(true);
+    }, 1300);
   };
+
   const verdict = score>=4 ? '⭐ Uitstekend! Sint is zeer trots op jou!'
     : score>=3 ? '🎁 Heel goed! Je weet veel van Sint!'
     : score>=2 ? '🍊 Aardig! Je leert het snel!'
     : '📖 Oefenen maar! Sint heeft nog veel te vertellen!';
+
   if (done) return (
     <div style={bubble}>
       <div style={{ textAlign:'center', padding:'8px 0' }}>
-        {/* Sint — 👑📚 stijl, geen kerstman */}
-        <div style={{ fontSize:38, marginBottom:6 }}>👑</div>
-        <div style={{ fontSize:28, marginBottom:10 }}>📚</div>
-        <p style={{ color:'#f5e642', fontSize:16, margin:'0 0 4px', fontFamily:"'IM Fell English', serif" }}>{score} van de {QUIZ.length} goed!</p>
+        <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}><MijterSVG size={38}/></div>
+        <p style={{ color:'#f5e642', fontSize:16, margin:'0 0 4px', fontFamily:"'IM Fell English', serif" }}>{score} van de {quiz.length} goed!</p>
         <p style={{ color:'rgba(245,230,66,0.72)', fontSize:13, fontStyle:'italic', margin:'0 0 14px' }}>{verdict}</p>
         <button onClick={onBack} style={btnR}>← Terug naar Sint</button>
       </div>
     </div>
   );
+
   return (
     <motion.div key={qi} initial={{ opacity:0, x:20 }} animate={{ opacity:1, x:0 }}>
       <div style={bubble}>
-        {/* Quiz header met mijter */}
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-          <MijterSVG size={24} />
+          <MijterSVG size={22}/>
           <p style={{ color:'rgba(212,160,23,0.55)', fontSize:10, margin:0, letterSpacing:'0.12em' }}>
-            VRAAG {qi+1} / {QUIZ.length} · {score} punt{score!==1?'en':''}
+            VRAAG {qi+1} / {quiz.length} · {score} punt{score!==1?'en':''}
           </p>
         </div>
         <p style={{ color:'#f5e642', fontSize:14, margin:'0 0 14px', lineHeight:1.6, fontFamily:"'IM Fell English', serif" }}>
@@ -550,11 +497,16 @@ function QuizMode({ onBack }) {
         <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
           {q.answers.map((a, i) => {
             let bg='rgba(212,160,23,0.07)', border='rgba(212,160,23,0.2)', color='rgba(245,230,66,0.82)';
-            if (chosen!==null) {
-              if (i===q.correct) { bg='rgba(34,139,34,0.25)'; border='#228B22'; color='#90EE90'; }
-              else if (i===chosen) { bg='rgba(160,0,20,0.25)'; border='#c0001a'; color='#ff9999'; }
+            if (chosen !== null) {
+              if (i === q.correct) { bg='rgba(34,139,34,0.25)'; border='#228B22'; color='#90EE90'; }
+              else if (i === chosen) { bg='rgba(160,0,20,0.25)'; border='#c0001a'; color='#ff9999'; }
             }
-            return <button key={i} onClick={() => pick(i)} style={{ padding:'9px 14px', borderRadius:10, textAlign:'left', background:bg, border:`1px solid ${border}`, color, fontSize:13, cursor:'pointer', fontFamily:"'IM Fell English', serif", transition:'all 0.2s' }}>{['A','B','C','D'][i]}. {a}</button>;
+            return (
+              <button key={i} onClick={() => pick(i)}
+                style={{ padding:'9px 14px', borderRadius:10, textAlign:'left', background:bg, border:`1px solid ${border}`, color, fontSize:13, cursor:'pointer', fontFamily:"'IM Fell English', serif", transition:'all 0.2s' }}>
+                {['A','B','C','D'][i]}. {a}
+              </button>
+            );
           })}
         </div>
         <button onClick={onBack} style={{ ...btnR, marginTop:12, padding:'7px 14px', fontSize:11 }}>← Stoppen</button>
@@ -575,19 +527,16 @@ function RijmMode({ apiKey, onBack }) {
 
   const go = async () => {
     if (!name||!age||!wish) { setErr('Vul naam, leeftijd én wens in ✨'); return; }
+    if (!apiKey) { setErr('Stel eerst een API sleutel in! 🔑'); return; }
     setLoading(true); setErr(''); setResult(null);
     try {
-      const resp = await fetchWithRetry(() =>
-        fetch('https://api.anthropic.com/v1/messages', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user',content:buildRijmPrompt(name,age,wish)}] }),
-        }).then(r=>r.json())
-      );
-      if (resp.error) throw new Error(resp.error.message);
-      const data = JSON.parse((resp.content?.[0]?.text||'{}').replace(/```json|```/g,'').trim());
+      const raw = await callGemini(apiKey, buildRijmPrompt(name, age, wish));
+      const data = JSON.parse(raw);
       setResult(data); setSpeaking(true);
       speak((data.intro||'')+' '+(data.rijm||''), ()=>setSpeaking(false));
-    } catch { setErr('Sint kan nu niet antwoorden. Probeer opnieuw! ⏳'); }
+    } catch (e) {
+      setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
+    }
     setLoading(false);
   };
 
@@ -595,7 +544,7 @@ function RijmMode({ apiKey, onBack }) {
     <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
       <div style={bubble}>
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-          <MijterSVG size={28} />
+          <MijterSVG size={26}/>
           <p style={{ color:'#f5e642', fontSize:14, margin:0, fontFamily:"'IM Fell English', serif" }}>Sint schrijft een persoonlijk rijmpje!</p>
         </div>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="Naam van het kind..." style={inp}/>
@@ -604,7 +553,9 @@ function RijmMode({ apiKey, onBack }) {
         {err && <p style={{ color:'#ff9999', fontSize:12, margin:'0 0 8px' }}>{err}</p>}
         <div style={{ display:'flex', gap:8, marginTop:4 }}>
           <button onClick={onBack} style={{ ...btnR, padding:'9px 14px', fontSize:12 }}>← Terug</button>
-          <button onClick={go} disabled={loading} style={{ ...btnG, flex:1 }}>{loading?'✨ Sint schrijft...':'🖊️ Schrijf mijn rijmpje!'}</button>
+          <button onClick={go} disabled={loading} style={{ ...btnG, flex:1 }}>
+            {loading ? '✨ Sint schrijft...' : '🖊️ Schrijf mijn rijmpje!'}
+          </button>
         </div>
       </div>
       <AnimatePresence>
@@ -616,9 +567,9 @@ function RijmMode({ apiKey, onBack }) {
                 <p key={i} style={{ color:'#f5e642', fontSize:13, margin:'0 0 4px', fontFamily:"'IM Fell English', serif", fontStyle:'italic', lineHeight:1.8 }}>{line}</p>
               ))}
             </div>
-            <button onClick={()=>{setSpeaking(true);speak((result.intro||'')+' '+(result.rijm||''),()=>setSpeaking(false));}}
+            <button onClick={()=>{setSpeaking(true); speak((result.intro||'')+' '+(result.rijm||''), ()=>setSpeaking(false));}}
               style={{ marginTop:10, background:'none', border:'none', color:'rgba(212,160,23,0.55)', cursor:'pointer', fontSize:13 }}>
-              🔊 {speaking?'Sint spreekt...':'Opnieuw voorlezen'}
+              🔊 {speaking ? 'Sint spreekt...' : 'Opnieuw voorlezen'}
             </button>
           </motion.div>
         )}
@@ -637,18 +588,15 @@ function VerlangMode({ apiKey, onBack }) {
 
   const go = async () => {
     if (!name||!wishes) { setErr('Vertel je naam en wensen! ✨'); return; }
+    if (!apiKey) { setErr('Stel eerst een API sleutel in! 🔑'); return; }
     setLoading(true); setErr(''); setResult(null);
     try {
-      const resp = await fetchWithRetry(() =>
-        fetch('https://api.anthropic.com/v1/messages', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user',content:buildVerlangPrompt(name,wishes)}] }),
-        }).then(r=>r.json())
-      );
-      if (resp.error) throw new Error(resp.error.message);
-      const data = JSON.parse((resp.content?.[0]?.text||'{}').replace(/```json|```/g,'').trim());
+      const raw = await callGemini(apiKey, buildVerlangPrompt(name, wishes));
+      const data = JSON.parse(raw);
       setResult(data);
-    } catch { setErr('Sint kan nu niet antwoorden. Probeer opnieuw! ⏳'); }
+    } catch {
+      setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
+    }
     setLoading(false);
   };
 
@@ -661,7 +609,9 @@ function VerlangMode({ apiKey, onBack }) {
         {err && <p style={{ color:'#ff9999', fontSize:12, margin:'0 0 8px' }}>{err}</p>}
         <div style={{ display:'flex', gap:8, marginTop:4 }}>
           <button onClick={onBack} style={{ ...btnR, padding:'9px 14px', fontSize:12 }}>← Terug</button>
-          <button onClick={go} disabled={loading} style={{ ...btnG, flex:1 }}>{loading?'📜 Sint leest mee...':'📬 Stuur naar Sint!'}</button>
+          <button onClick={go} disabled={loading} style={{ ...btnG, flex:1 }}>
+            {loading ? '📜 Sint leest mee...' : '📬 Stuur naar Sint!'}
+          </button>
         </div>
       </div>
       <AnimatePresence>
@@ -693,19 +643,16 @@ function SchoenMode({ apiKey, onBack }) {
 
   const go = async () => {
     if (!name||!items) { setErr('Vertel wat je in je schoen hebt gelegd! 👟'); return; }
+    if (!apiKey) { setErr('Stel eerst een API sleutel in! 🔑'); return; }
     setLoading(true); setErr(''); setResult(null);
     try {
-      const resp = await fetchWithRetry(() =>
-        fetch('https://api.anthropic.com/v1/messages', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user',content:buildSchoenPrompt(name,items)}] }),
-        }).then(r=>r.json())
-      );
-      if (resp.error) throw new Error(resp.error.message);
-      const data = JSON.parse((resp.content?.[0]?.text||'{}').replace(/```json|```/g,'').trim());
+      const raw = await callGemini(apiKey, buildSchoenPrompt(name, items));
+      const data = JSON.parse(raw);
       setResult(data); setSpeaking(true);
       speak(data.bericht||'', ()=>setSpeaking(false));
-    } catch { setErr('Sint kan nu niet antwoorden. Probeer opnieuw! ⏳'); }
+    } catch {
+      setErr('Sint kan nu niet antwoorden. Probeer het opnieuw! ⏳');
+    }
     setLoading(false);
   };
 
@@ -718,7 +665,9 @@ function SchoenMode({ apiKey, onBack }) {
         {err && <p style={{ color:'#ff9999', fontSize:12, margin:'0 0 8px' }}>{err}</p>}
         <div style={{ display:'flex', gap:8, marginTop:4 }}>
           <button onClick={onBack} style={{ ...btnR, padding:'9px 14px', fontSize:12 }}>← Terug</button>
-          <button onClick={go} disabled={loading} style={{ ...btnG, flex:1 }}>{loading?'🎅 Sint kijkt...':'🥕 Zet mijn schoen!'}</button>
+          <button onClick={go} disabled={loading} style={{ ...btnG, flex:1 }}>
+            {loading ? '🎅 Sint kijkt...' : '🥕 Zet mijn schoen!'}
+          </button>
         </div>
       </div>
       <AnimatePresence>
@@ -770,7 +719,7 @@ function HomeMenu({ onSelect }) {
   );
 }
 
-// ── API Key modal ─────────────────────────────────────────────────────────
+// ── API Key modal — verwijst naar Google AI Studio ────────────────────────
 function ApiKeyModal({ current, onSave, onClose }) {
   const [val, setVal] = useState(current);
   return (
@@ -779,19 +728,19 @@ function ApiKeyModal({ current, onSave, onClose }) {
       onClick={e => e.target===e.currentTarget && onClose()}>
       <div style={{ background:'linear-gradient(160deg,#200008,#0e0003)', border:'2px solid rgba(212,160,23,0.45)', borderRadius:20, padding:24, maxWidth:320, width:'92%', boxShadow:'0 8px 40px rgba(0,0,0,0.9)' }}>
         <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}><MijterSVG size={40}/></div>
-        <h2 style={{ margin:'0 0 6px', fontSize:17, color:'#f5e642', textAlign:'center', fontFamily:"'IM Fell English', serif", fontWeight:400 }}>🔑 API Sleutel instellen</h2>
+        <h2 style={{ margin:'0 0 6px', fontSize:17, color:'#f5e642', textAlign:'center', fontFamily:"'IM Fell English', serif", fontWeight:400 }}>🔑 Gemini API Sleutel</h2>
         <p style={{ margin:'0 0 4px', fontSize:11, color:'rgba(245,230,66,0.42)', textAlign:'center', lineHeight:1.6 }}>
-          Voer je Anthropic API sleutel in.<br/>Wordt alleen op dit apparaat opgeslagen.
+          Dezelfde sleutel als de andere spiegels.<br/>Wordt alleen op dit apparaat opgeslagen.
         </p>
         <p style={{ margin:'0 0 14px', fontSize:11, textAlign:'center' }}>
           Nog geen sleutel?{' '}
-          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer"
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
             style={{ color:'#d4a017', textDecoration:'underline', cursor:'pointer' }}>
-            Haal hem hier op →
+            Haal hem hier op bij Google AI Studio →
           </a>
         </p>
-        <input type="password" value={val} onChange={e=>setVal(e.target.value)} placeholder="sk-ant-..."
-          style={{ ...inp, textAlign:'center', marginBottom:14 }}/>
+        <input type="password" value={val} onChange={e=>setVal(e.target.value)}
+          placeholder="AIza..." style={{ ...inp, textAlign:'center', marginBottom:14 }}/>
         <div style={{ display:'flex', gap:10 }}>
           <button onClick={onClose} style={{ flex:1, padding:'9px', background:'transparent', border:'1px solid rgba(255,255,255,0.1)', borderRadius:10, color:'rgba(255,255,255,0.3)', cursor:'pointer', fontSize:12, fontFamily:"'IM Fell English', serif" }}>Annuleer</button>
           <button onClick={()=>onSave(val)} style={{ flex:1, padding:'9px', background:'linear-gradient(135deg,#c0001a,#e8002a)', border:'none', borderRadius:10, color:'#fff8f0', fontWeight:700, cursor:'pointer', fontSize:12, fontFamily:"'IM Fell English', serif" }}>Opslaan</button>
@@ -808,7 +757,7 @@ export default function SinterklasSpiegel() {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [apiKey, setApiKey] = useState(() => {
     if (ENV_KEY) return ENV_KEY;
-    try { return localStorage.getItem('sint_key_v3') || ''; } catch { return ''; }
+    try { return localStorage.getItem('sint_gemini_key') || ''; } catch { return ''; }
   });
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -834,7 +783,7 @@ export default function SinterklasSpiegel() {
 
   const saveKey = (k) => {
     setApiKey(k);
-    try { localStorage.setItem('sint_key_v3', k); } catch {}
+    try { localStorage.setItem('sint_gemini_key', k); } catch {}
     setShowKeyModal(false);
   };
 
@@ -851,7 +800,6 @@ export default function SinterklasSpiegel() {
         ))}
       </div>
 
-      {/* Header */}
       <header style={S.header}>
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
           <MijterSVG size={32}/>
@@ -882,7 +830,7 @@ export default function SinterklasSpiegel() {
         </motion.div>
       </div>
 
-      {/* Content — z-index 20 */}
+      {/* Content — z-index 20 zodat alles klikbaar is */}
       <div style={S.content}>
         <AnimatePresence mode="wait">
           {mode===MODE.HOME && (
@@ -926,7 +874,7 @@ export default function SinterklasSpiegel() {
       {/* API-key knop */}
       {!ENV_KEY && (
         <button onClick={()=>setShowKeyModal(true)} style={S.btnKey}>
-          🔑 {apiKey?'API sleutel ✓':'API sleutel instellen'}
+          🔑 {apiKey ? 'Gemini sleutel ✓' : 'API sleutel instellen'}
         </button>
       )}
 
