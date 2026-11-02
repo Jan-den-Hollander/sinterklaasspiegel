@@ -800,9 +800,7 @@ function CopyrightFooter() {
             <p style={{marginBottom:4}}>
               📧 <a href="mailto:jandenhollander@duck.com" style={{color:'#f5e642'}}>jandenhollander@duck.com</a>
             </p>
-            <p style={{marginTop:4,marginBottom:0}}>
-              🔗 <a href="https://github.com/Jan-den-Hollander" target="_blank" rel="noreferrer" style={{color:'#f5e642'}}>github.com/Jan-den-Hollander</a>
-            </p>
+            🔗 <a href="https://etalage-beta.vercel.app/" target="_blank" rel="noreferrer" style={{color:'#f5e642'}}>github.com/Jan-den-Hollander
             <button
               onClick={()=>setOpen(false)}
               style={{
@@ -876,7 +874,7 @@ function IntegrityGuard() {
         '<hr style="border-color:#333;margin:16px 0">' +
         '<p style="color:#ccc;font-size:13px">© Jan den Hollander</p>' +
         '<p><a href="mailto:jandenhollander@duck.com" style="color:#f5e642;font-size:12px">jandenhollander@duck.com</a></p>' +
-        '<p><a href="https://github.com/Jan-den-Hollander" target="_blank" style="color:#f5e642;font-size:12px">🔗 github.com/Jan-den-Hollander</a></p>' +
+        '<p><a href="https://etalage-beta.vercel.app/" target="_blank" style="color:#f5e642;font-size:12px">🔗 github etalage</a></p>' +
         '</div>';
     }
 
