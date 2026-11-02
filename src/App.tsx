@@ -1,5 +1,11 @@
 /**
- * Sinterklaas Spiegel — v5
+ * Sinterklaas Spiegel — v7
+ * © Jan den Hollander — jandenhollander@duck.com — alle rechten voorbehouden
+ * Nieuw in v7: copyright-balk onderaan + licentievenster + integriteitscheck.
+ * Nieuw in v6: camera is optioneel.
+ *  - Staat de camera uit, is hij geweigerd, niet beschikbaar of nog aan het opstarten?
+ *    Dan toont de spiegel de foto /sint-spiegel.jpg (mijter, boek en staf).
+ *  - Knop "Camera aan/uit" — de keuze wordt onthouden op dit apparaat.
  * Gemini logica 1-op-1 overgenomen van werkende Fate spiegel (v11b):
  *  - Zelfde localStorage sleutel: 'magic_mirror_gemini_key'
  *  - Zelfde fetchWithRetry / model fallback: gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash
@@ -13,6 +19,8 @@ import { motion, AnimatePresence } from 'motion/react';
 const ENV_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_KEY) || '';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const STORAGE_KEY = 'magic_mirror_gemini_key'; // identiek aan Fate spiegel
+const CAM_KEY = 'sint_spiegel_camera';          // 'on' of 'off'
+const FALLBACK_IMG = '/sint-spiegel.jpg';       // staat in de map public/
 
 // ── Retry helper — identiek aan Fate spiegel ──────────────────────────────
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
@@ -617,13 +625,42 @@ export default function SinterklasSpiegel() {
     if(ENV_KEY)return ENV_KEY;
     try{return localStorage.getItem(STORAGE_KEY)||'';}catch{return '';}
   });
+
+  // Camera: voorkeur (aan/uit, onthouden) + of er echt beeld is (camReady)
+  const [camOn,setCamOn]=useState(()=>{
+    try{return localStorage.getItem(CAM_KEY)!=='off';}catch{return true;}
+  });
+  const [camReady,setCamReady]=useState(false);
   const videoRef=useRef(null);
   const streamRef=useRef(null);
 
   useEffect(()=>{
-    (async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});streamRef.current=stream;if(videoRef.current)videoRef.current.srcObject=stream;}catch{}})();
-    return()=>streamRef.current?.getTracks().forEach(t=>t.stop());
-  },[]);
+    const stop=()=>{
+      streamRef.current?.getTracks().forEach(t=>t.stop());
+      streamRef.current=null;
+      if(videoRef.current)videoRef.current.srcObject=null;
+    };
+    if(!camOn){stop();setCamReady(false);return;}
+    let cancelled=false;
+    (async()=>{
+      try{
+        const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});
+        if(cancelled){stream.getTracks().forEach(t=>t.stop());return;}
+        streamRef.current=stream;
+        if(videoRef.current)videoRef.current.srcObject=stream;
+      }catch{
+        // geweigerd, geen camera of niet beschikbaar → foto blijft zichtbaar
+        if(!cancelled)setCamReady(false);
+      }
+    })();
+    return()=>{cancelled=true;stop();setCamReady(false);};
+  },[camOn]);
+
+  const toggleCam=()=>{
+    const next=!camOn;
+    setCamOn(next);
+    try{localStorage.setItem(CAM_KEY,next?'on':'off');}catch{}
+  };
 
   useEffect(()=>{
     const t=setTimeout(()=>{setIsSpeaking(true);speak('Vol verwachting klopt ons hart! Welkom bij de Sinterklaas Spiegel!',()=>setIsSpeaking(false));},1200);
@@ -654,7 +691,11 @@ export default function SinterklasSpiegel() {
       <div style={S.mirrorWrap}>
         <SintFrame W={270} H={330}/>
         <div style={S.mirrorGlass}>
-          <video ref={videoRef} autoPlay playsInline muted style={S.video}/>
+          {/* Terugval: foto van mijter, boek en staf — altijd onderaan aanwezig */}
+          <img src={FALLBACK_IMG} alt="" draggable={false} style={S.fallbackImg}/>
+          {/* Camerabeeld — pas zichtbaar zodra de camera echt beeld levert */}
+          <video ref={videoRef} autoPlay playsInline muted onPlaying={()=>setCamReady(true)}
+            style={{...S.video,opacity:camReady&&camOn?1:0}}/>
           {mode!==MODE.HOME&&(
             <div style={{position:'absolute',inset:0,pointerEvents:'none',overflow:'hidden',borderRadius:'50% 50% 47% 47%',zIndex:3}}>
               {PEPERS.map(p=><div key={p.id} style={{position:'absolute',left:`${p.x}%`,top:`${p.y}%`,fontSize:11,animation:`peper ${p.dur}s ease-in-out ${p.delay}s infinite`,userSelect:'none'}}>🍊</div>)}
@@ -674,10 +715,198 @@ export default function SinterklasSpiegel() {
           {mode===MODE.TELLER&&<motion.div key="teller" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} style={{width:'100%'}}><div style={bubble}><CountdownDisplay/><div style={{textAlign:'center',marginTop:14}}><button onClick={()=>setMode(MODE.HOME)} style={{...btnR,fontSize:12}}>← Terug naar Sint</button></div></div></motion.div>}
         </AnimatePresence>
       </div>
-      {!ENV_KEY&&<button onClick={()=>setShowKeyModal(true)} style={S.btnKey}>🔑 {apiKey?'Gemini sleutel ✓':'API sleutel instellen'}</button>}
+      <div style={S.footerRow}>
+        <button onClick={toggleCam} style={S.btnSmall}>{camOn?'📷 Camera uitzetten':'📷 Camera aanzetten'}</button>
+        {!ENV_KEY&&<button onClick={()=>setShowKeyModal(true)} style={S.btnSmall}>🔑 {apiKey?'Gemini sleutel ✓':'API sleutel instellen'}</button>}
+      </div>
       <AnimatePresence>{showKeyModal&&<ApiKeyModal current={apiKey} onSave={saveKey} onClose={()=>setShowKeyModal(false)}/>}</AnimatePresence>
+
+      {/* Copyright-balk + integriteitscheck */}
+      <CopyrightFooter/>
+      <IntegrityGuard/>
     </div>
   );
+}
+
+// ============================================================
+// COPYRIGHT FOOTER + LICENTIEMODAL
+// ============================================================
+const PROJECT_NAME = 'Sinterklaas Spiegel';
+
+function CopyrightFooter() {
+  const [open, setOpen] = useState(false);
+  const year = new Date().getFullYear();
+
+  return (
+    <>
+      <div
+        id="jdh-copyright-footer"
+        style={{
+          position:'fixed', bottom:0, left:0, right:0,
+          background:'rgba(2,0,6,0.92)', color:'#d8c9a0',
+          fontSize:11, textAlign:'center', padding:'4px 8px',
+          zIndex:99999, fontFamily:'sans-serif', letterSpacing:'0.3px',
+          userSelect:'none', borderTop:'1px solid rgba(212,160,23,0.3)',
+        }}
+      >
+        © {year} Jan den Hollander &nbsp;|&nbsp;
+        <span style={{color:'#f5e642'}}>{PROJECT_NAME}</span> &nbsp;|&nbsp;
+        Vrij gebruik · niet-commercieel · ongewijzigd &nbsp;|&nbsp;
+        <span
+          style={{color:'#d4a017',cursor:'pointer',textDecoration:'underline'}}
+          onClick={()=>setOpen(true)}
+        >
+          ℹ️ Licentie
+        </span>
+      </div>
+
+      {open && (
+        <div
+          id="jdh-modal"
+          style={{
+            display:'flex', position:'fixed', inset:0,
+            background:'rgba(0,0,0,0.75)', zIndex:999999,
+            alignItems:'center', justifyContent:'center',
+          }}
+          onClick={(e)=>e.target===e.currentTarget&&setOpen(false)}
+        >
+          <div
+            style={{
+              background:'linear-gradient(160deg,#200008,#0e0003)',
+              color:'#f0e8d0', border:'1px solid rgba(212,160,23,0.46)',
+              borderRadius:10, maxWidth:480, width:'90%', padding:24,
+              fontFamily:'sans-serif', fontSize:13, lineHeight:1.6,
+              maxHeight:'85vh', overflowY:'auto',
+            }}
+          >
+            <h3 style={{color:'#f5e642',marginTop:0}}>
+              © Jan den Hollander &nbsp;·&nbsp;
+              <span style={{fontWeight:'normal',fontSize:12}}>{PROJECT_NAME}</span>
+            </h3>
+            <p>Dit hulpmiddel is <strong>gratis</strong> en mag vrij worden gedeeld,
+            uitsluitend <strong>ongewijzigd</strong> en voor
+            <strong> niet-commerciële</strong> doeleinden, met bronvermelding.</p>
+            <p>Commercieel gebruik, wijziging of verkoop is <strong>verboden</strong>
+            zonder schriftelijke toestemming. Het gebruik van naam of projecttitel
+            impliceert geen toestemming en vormt bij commercieel gebruik een
+            zelfstandige auteursrechtinbreuk.</p>
+            <p style={{color:'#aaa',fontSize:11}}>
+              This tool is free and may be shared freely, unmodified, for non-commercial
+              purposes only, with attribution. Commercial use, modification or sale is
+              prohibited.<br /><br />
+              Quest'opera è gratuita e può essere condivisa liberamente, senza modifiche,
+              per scopi non commerciali, con attribuzione. L'uso commerciale è vietato.
+            </p>
+            <p style={{marginBottom:4}}>
+              📧 <a href="mailto:jandenhollander@duck.com" style={{color:'#f5e642'}}>jandenhollander@duck.com</a>
+            </p>
+            <p style={{marginTop:4,marginBottom:0}}>
+              🔗 <a href="https://github.com/Jan-den-Hollander" target="_blank" rel="noreferrer" style={{color:'#f5e642'}}>github.com/Jan-den-Hollander</a>
+            </p>
+            <button
+              onClick={()=>setOpen(false)}
+              style={{
+                marginTop:16, padding:'8px 20px',
+                background:'linear-gradient(135deg,#d4a017,#f5e642)',
+                color:'#160900', border:'none', borderRadius:8,
+                cursor:'pointer', fontWeight:700,
+              }}
+            >
+              Sluiten
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ============================================================
+// INTEGRITEITSCHECK — domeincontrole + anti-verwijdering
+// ============================================================
+function IntegrityGuard() {
+  useEffect(()=>{
+    // Toegestane domeinen (een domein dat deze tekst bevat telt ook mee).
+    // Heeft de Sinterklaas spiegel een andere Vercel-naam? Voeg die hier toe.
+    var ALLOWED = [
+      'localhost', '127.0.0.1',
+      'jan-den-hollander.github.io',
+      'sinterklaas',
+      'claude.ai', 'stackblitz.io', 'stackblitz.com',
+    ];
+
+    function domainAllowed() {
+      var host = window.location.hostname.toLowerCase();
+      var proto = window.location.protocol;
+      if (proto === 'file:' || proto === 'content:') return true;
+      if (!host) return true;
+      return ALLOWED.some(function (a) {
+        return host === a || host.endsWith('.' + a) || host.indexOf(a) !== -1;
+      });
+    }
+
+    function warnDomain() {
+      if (document.getElementById('jdh-domain-warning')) return;
+      var banner = document.createElement('div');
+      banner.id = 'jdh-domain-warning';
+      banner.style.cssText =
+        'position:fixed;top:0;left:0;right:0;z-index:99998;' +
+        'background:#8a2010;color:#fff;font-family:sans-serif;' +
+        'font-size:12px;text-align:center;padding:8px 12px;line-height:1.5;';
+      banner.innerHTML =
+        '⚠️ <strong>' + PROJECT_NAME + '</strong> draait op een niet-erkend domein ' +
+        '(<em>' + window.location.hostname + '</em>). ' +
+        'Origineel: <a href="https://github.com/Jan-den-Hollander" target="_blank" style="color:#ffccaa">github.com/Jan-den-Hollander</a> · ' +
+        '<a href="mailto:jandenhollander@duck.com" style="color:#ffccaa">jandenhollander@duck.com</a>';
+      document.body.insertBefore(banner, document.body.firstChild);
+    }
+
+    if (!domainAllowed()) setTimeout(warnDomain, 800);
+
+    function blockApp() {
+      document.body.innerHTML = '';
+      document.body.style.cssText =
+        'margin:0;background:#020006;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;';
+      document.body.innerHTML =
+        '<div style="text-align:center;color:#e55;max-width:440px;padding:24px">' +
+        '<div style="font-size:52px">⛔</div>' +
+        '<h2 style="color:#e55;margin:12px 0 8px">Toegang geblokkeerd</h2>' +
+        '<p style="color:#ddd;font-size:14px">De copyright-informatie van <strong style="color:#f5e642">' + PROJECT_NAME + '</strong> is verwijderd of gewijzigd.</p>' +
+        '<p style="color:#aaa;font-size:12px">The copyright information of this application has been removed or modified.<br>La sezione copyright di questa applicazione è stata rimossa o modificata.</p>' +
+        '<hr style="border-color:#333;margin:16px 0">' +
+        '<p style="color:#ccc;font-size:13px">© Jan den Hollander</p>' +
+        '<p><a href="mailto:jandenhollander@duck.com" style="color:#f5e642;font-size:12px">jandenhollander@duck.com</a></p>' +
+        '<p><a href="https://github.com/Jan-den-Hollander" target="_blank" style="color:#f5e642;font-size:12px">🔗 github.com/Jan-den-Hollander</a></p>' +
+        '</div>';
+    }
+
+    function checkIntegrity() {
+      var footer = document.getElementById('jdh-copyright-footer');
+      if (!footer) { blockApp(); return; }
+      var fs = window.getComputedStyle(footer);
+      if (fs.display === 'none' || fs.visibility === 'hidden' || fs.opacity === '0') {
+        footer.style.cssText += ';display:block!important;visibility:visible!important;opacity:1!important';
+      }
+    }
+
+    var interval = setInterval(checkIntegrity, 3000);
+
+    var observer = new MutationObserver(function (mutations) {
+      mutations.forEach(function (m) {
+        m.removedNodes.forEach(function (node) {
+          if (node && node.id === 'jdh-copyright-footer') blockApp();
+        });
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return ()=>{
+      clearInterval(interval);
+      observer.disconnect();
+    };
+  },[]);
+
+  return null;
 }
 
 const CSS=`
@@ -695,7 +924,7 @@ const CSS=`
 `;
 
 const S={
-  app:{minHeight:'100vh',background:'#020006',color:'#f0e8d0',fontFamily:"'IM Fell English',serif",display:'flex',flexDirection:'column',alignItems:'center',padding:'0 0 52px',position:'relative',overflow:'hidden'},
+  app:{minHeight:'100vh',background:'#020006',color:'#f0e8d0',fontFamily:"'IM Fell English',serif",display:'flex',flexDirection:'column',alignItems:'center',padding:'0 0 96px',position:'relative',overflow:'hidden'},
   bg:{position:'fixed',inset:0,pointerEvents:'none',zIndex:0,background:'radial-gradient(ellipse at 50% 0%,rgba(90,0,14,0.65) 0%,rgba(6,0,16,0.97) 55%,#020006 100%)'},
   bgNight:{position:'fixed',inset:0,pointerEvents:'none',zIndex:0,background:'radial-gradient(ellipse at 10% 95%,rgba(18,8,0,0.4) 0%,transparent 50%),radial-gradient(ellipse at 90% 95%,rgba(18,8,0,0.4) 0%,transparent 50%)'},
   header:{width:'100%',maxWidth:480,padding:'18px 16px 8px',display:'flex',flexDirection:'column',alignItems:'center',position:'relative',zIndex:10},
@@ -703,8 +932,10 @@ const S={
   subtitle:{margin:'3px 0 0',fontSize:11,color:'rgba(212,160,23,0.45)',letterSpacing:'0.1em',fontStyle:'italic'},
   mirrorWrap:{position:'relative',width:270,height:330,display:'flex',alignItems:'center',justifyContent:'center',zIndex:10,marginBottom:10},
   mirrorGlass:{position:'absolute',top:18,left:22,width:226,height:290,borderRadius:'50% 50% 47% 47%',overflow:'hidden',background:'linear-gradient(160deg,#110006 0%,#040002 100%)',animation:'mirrorPulse 4.5s ease-in-out infinite',zIndex:1},
-  video:{width:'100%',height:'100%',objectFit:'cover',transform:'scaleX(-1)',filter:'brightness(0.78) contrast(1.08) saturate(0.7)'},
+  fallbackImg:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover',objectPosition:'50% 45%',filter:'brightness(0.92) saturate(0.95)',userSelect:'none'},
+  video:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover',transform:'scaleX(-1)',filter:'brightness(0.78) contrast(1.08) saturate(0.7)',transition:'opacity 0.6s ease'},
   sintBadge:{position:'absolute',bottom:-10,left:'50%',transform:'translateX(-50%)',background:'linear-gradient(135deg,rgba(70,0,10,0.97),rgba(35,0,5,0.97))',border:'1px solid rgba(212,160,23,0.44)',borderRadius:20,padding:'4px 20px',fontSize:12,color:'#f5e642',whiteSpace:'nowrap',zIndex:10,letterSpacing:'0.08em',boxShadow:'0 2px 12px rgba(0,0,0,0.55)'},
   content:{width:'100%',maxWidth:430,padding:'0 12px',display:'flex',flexDirection:'column',alignItems:'center',gap:10,position:'relative',zIndex:20},
-  btnKey:{marginTop:18,padding:'6px 16px',background:'transparent',border:'1px solid rgba(212,160,23,0.15)',borderRadius:20,fontSize:10,color:'rgba(212,160,23,0.4)',letterSpacing:'0.1em',cursor:'pointer',position:'relative',zIndex:20,fontFamily:"'IM Fell English',serif"},
+  footerRow:{marginTop:18,display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center',position:'relative',zIndex:20},
+  btnSmall:{padding:'6px 16px',background:'transparent',border:'1px solid rgba(212,160,23,0.15)',borderRadius:20,fontSize:10,color:'rgba(212,160,23,0.4)',letterSpacing:'0.1em',cursor:'pointer',fontFamily:"'IM Fell English',serif"},
 };
