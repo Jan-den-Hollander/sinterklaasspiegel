@@ -1,7 +1,7 @@
 /**
  * Sinterklaas Spiegel — v7
  * © Jan den Hollander — jandenhollander@duck.com — alle rechten voorbehouden
- * Nieuw in v7: copyright-balk onderaan + licentievenster + integriteitscheck.
+ * Nieuw in v7: copyright-balk onderaan + licentievenster (link naar etalage) + integriteitscheck.
  * Nieuw in v6: camera is optioneel.
  *  - Staat de camera uit, is hij geweigerd, niet beschikbaar of nog aan het opstarten?
  *    Dan toont de spiegel de foto /sint-spiegel.jpg (mijter, boek en staf).
@@ -786,7 +786,7 @@ function CopyrightFooter() {
             <p>Dit hulpmiddel is <strong>gratis</strong> en mag vrij worden gedeeld,
             uitsluitend <strong>ongewijzigd</strong> en voor
             <strong> niet-commerciële</strong> doeleinden, met bronvermelding.</p>
-            <p>Commercieel gebruik, wijziging of verkoop is <strong>verboden</strong>
+            <p>Commercieel gebruik, wijziging of verkoop is <strong>verboden</strong>{' '}
             zonder schriftelijke toestemming. Het gebruik van naam of projecttitel
             impliceert geen toestemming en vormt bij commercieel gebruik een
             zelfstandige auteursrechtinbreuk.</p>
@@ -800,7 +800,9 @@ function CopyrightFooter() {
             <p style={{marginBottom:4}}>
               📧 <a href="mailto:jandenhollander@duck.com" style={{color:'#f5e642'}}>jandenhollander@duck.com</a>
             </p>
-            🔗 <a href="https://etalage-beta.vercel.app/" target="_blank" rel="noreferrer" style={{color:'#f5e642'}}>github.com/Jan-den-Hollander
+            <p style={{marginTop:4,marginBottom:0}}>
+              🔗 <a href="https://etalage-beta.vercel.app/" target="_blank" rel="noreferrer" style={{color:'#f5e642'}}>github-etalage</a>
+            </p>
             <button
               onClick={()=>setOpen(false)}
               style={{
@@ -874,7 +876,7 @@ function IntegrityGuard() {
         '<hr style="border-color:#333;margin:16px 0">' +
         '<p style="color:#ccc;font-size:13px">© Jan den Hollander</p>' +
         '<p><a href="mailto:jandenhollander@duck.com" style="color:#f5e642;font-size:12px">jandenhollander@duck.com</a></p>' +
-        '<p><a href="https://etalage-beta.vercel.app/" target="_blank" style="color:#f5e642;font-size:12px">🔗 github etalage</a></p>' +
+        '<p><a href="https://github.com/Jan-den-Hollander" target="_blank" style="color:#f5e642;font-size:12px">🔗 github.com/Jan-den-Hollander</a></p>' +
         '</div>';
     }
 
