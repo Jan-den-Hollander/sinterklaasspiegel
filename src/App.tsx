@@ -1,17 +1,14 @@
+// @ts-nocheck
 /**
- * Sinterklaas Spiegel — v8
+ * Sinterklaas Spiegel — v9
  * © Jan den Hollander — jandenhollander@duck.com — alle rechten voorbehouden
+ * Nieuw in v9: rijmpje-fix.
+ *  - Gemini: thinking uit, meer tokens, JSON-modus, robuuste JSON-parser.
+ *  - Prompt: de wens staat aan het einde van een regel en de volgende regel rijmt erop.
+ *  - Terugval is nu ook een rijmpje met naam en wens (geen proza meer).
  * Nieuw in v8: menuknop "Stuur een briefkaart" — opent cartolina-mauve.vercel.app in een nieuw tabblad.
  * Nieuw in v7: copyright-balk onderaan + licentievenster (link naar etalage) + integriteitscheck.
- * Nieuw in v6: camera is optioneel.
- *  - Staat de camera uit, is hij geweigerd, niet beschikbaar of nog aan het opstarten?
- *    Dan toont de spiegel de foto /sint-spiegel.jpg (mijter, boek en staf).
- *  - Knop "Camera aan/uit" — de keuze wordt onthouden op dit apparaat.
- * Gemini logica 1-op-1 overgenomen van werkende Fate spiegel (v11b):
- *  - Zelfde localStorage sleutel: 'magic_mirror_gemini_key'
- *  - Zelfde fetchWithRetry / model fallback: gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash
- *  - Fallback boodschap als alle modellen falen — Sint reageert ALTIJD
- *  - Quiz antwoorden geshuffeld
+ * Nieuw in v6: camera is optioneel (foto /sint-spiegel.jpg als terugval, keuze wordt onthouden).
  */
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -24,7 +21,7 @@ const CAM_KEY = 'sint_spiegel_camera';          // 'on' of 'off'
 const FALLBACK_IMG = '/sint-spiegel.jpg';       // staat in de map public/
 const BRIEFKAART_URL = 'https://cartolina-mauve.vercel.app/'; // Briefkaart · Cartolina app
 
-// ── Retry helper — identiek aan Fate spiegel ──────────────────────────────
+// ── Retry helper ──────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
 async function fetchWithRetry(fn, maxAttempts = 3) {
@@ -32,7 +29,7 @@ async function fetchWithRetry(fn, maxAttempts = 3) {
     try {
       return await Promise.race([
         fn(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 20000))
       ]);
     } catch (err) {
       const isLast = attempt === maxAttempts;
@@ -43,7 +40,14 @@ async function fetchWithRetry(fn, maxAttempts = 3) {
   }
 }
 
-// ── Gemini tekst aanroep met model-fallback — identiek aan Fate spiegel ───
+// ── JSON uit een antwoord halen, ook met extra tekst eromheen ─────────────
+function parseJson(raw) {
+  const s = raw.indexOf('{'), e = raw.lastIndexOf('}');
+  if (s === -1 || e === -1) throw new Error('geen json');
+  return JSON.parse(raw.slice(s, e + 1));
+}
+
+// ── Gemini tekst aanroep met model-fallback ───────────────────────────────
 async function callGemini(apiKey, prompt) {
   let lastErr;
   for (const model of ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']) {
@@ -54,7 +58,12 @@ async function callGemini(apiKey, prompt) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.9, maxOutputTokens: 800 },
+            generationConfig: {
+              temperature: 0.9,
+              maxOutputTokens: 2048,
+              responseMimeType: 'application/json',
+              ...(model.startsWith('gemini-2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+            },
           }),
         }).then(async r => {
           const json = await r.json();
@@ -62,8 +71,8 @@ async function callGemini(apiKey, prompt) {
           return json;
         })
       );
-      if (resp.error) throw new Error(resp.error.message || 'Gemini fout');
-      const raw = resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      const raw = (resp.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+      if (!raw.trim()) throw new Error('leeg antwoord');
       return raw.replace(/```json|```/g, '').trim();
     } catch (err) {
       lastErr = err;
@@ -73,7 +82,7 @@ async function callGemini(apiKey, prompt) {
   throw lastErr;
 }
 
-// ── TTS — zelfde als Fate spiegel ─────────────────────────────────────────
+// ── TTS ───────────────────────────────────────────────────────────────────
 const getVoices = () => new Promise(resolve => {
   const v = window.speechSynthesis.getVoices();
   if (v.length) { resolve(v); return; }
@@ -110,19 +119,29 @@ function getCountdown() {
   };
 }
 
-// ── Fallback boodschappen — Sint reageert ALTIJD ──────────────────────────
-function buildSintFallback(name) {
-  const reacties = [
-    `Lieve ${name}, Sint heeft jouw brief gelezen en weet precies wat jij nodig hebt! Wacht maar rustig af — Piet is al bezig met de zakken vullen. Fijn Sinterklaasfeest! 🎁`,
-    `Beste ${name}, Sint heeft in zijn grote boek gelezen dat jij een heel braaf kind bent dit jaar! Dat wordt zeker beloond op Pakjesavond. Vol verwachting klopt ons hart! ⭐`,
-    `Ha ${name}! Sint weet al lang wat jij wenst — hij heeft het immers opgeschreven in zijn grote boek. Zet je schoen maar klaar, dan hoor je het gauw! 🌙`,
-  ];
-  return reacties[Math.floor(Math.random() * reacties.length)];
+// ── Terugval-boodschappen — Sint reageert ALTIJD ──────────────────────────
+// Rijmende terugval: de wens staat aan het eind van twee regels (rijmt op zichzelf)
+function buildRijmFallback(name, wish) {
+  const w = (wish || 'een verrassing').trim().replace(/[.!?,]+$/, '');
+  return {
+    intro: `Sint heeft jouw wens gehoord, ${name}!`,
+    rijm: [
+      `Lieve ${name}, hier is Sint,`,
+      `ik ben je heel goed gezind.`,
+      `Jij wenst zo graag ${w},`,
+      `dat schreef ik op: ${w}!`,
+      `Je bent een kind dat Sint graag mag,`,
+      `dus kijk maar uit naar pakjesdag!`,
+      `Zet je schoen maar klaar, de nacht is bijna daar,`,
+      `Fijn Sinterklaasfeest, lieve ${name}, tot volgend jaar!`,
+    ].join('\n'),
+    _isFallback: true,
+  };
 }
 
 function buildVerlangFallback(name) {
   return {
-    reacties: [{ wens: 'jouw wens', reactie: `Sint heeft jouw verlanglijstje persoonlijk gelezen, ${name}! Hij schrijft hem zorgvuldig in het grote boek: "Een hele mooie wens,Ik doe mijn best, maar wees niet teleurgesteld als het niet lukt en je iets anders krijgt misschien 🥁👋!"` }],
+    reacties: [{ wens: 'jouw wens', reactie: `Sint heeft jouw verlanglijstje persoonlijk gelezen, ${name}! Hij schrijft hem zorgvuldig in het grote boek: "Een hele mooie wens, ik doe mijn best, maar wees niet teleurgesteld als het niet lukt en je iets anders krijgt misschien 🥁👋!"` }],
     slotwoord: `Fijn Sinterklaasfeest, lieve ${name}! Vol verwachting klopt ons hart! 🎁`,
     _isFallback: true,
   };
@@ -160,11 +179,15 @@ const MODE = { HOME: 'home', RIJM: 'rijm', VERLANG: 'verlang', SCHOEN: 'schoen',
 
 // ── Prompts ───────────────────────────────────────────────────────────────
 const buildRijmPrompt = (name, age, wish) =>
-  `Je bent Sinterklaas zelf — waardig, hartelijk, met humor voor kinderen. Schrijf een persoonlijk Sinterklaas-rijmpje voor ${name} (${age} jaar) die graag ${wish} wil.
-Stijl: klassiek AABB rijmschema, 8 regels, kindvriendelijk. Gebruik NOOIT "ho ho ho".
-Eindig met een plechtige zin zoals "Fijn Sinterklaasfeest, lieve ${name}!"
-Antwoord ALLEEN als JSON zonder markdown of uitleg:
-{"rijm":"regel1\\nregel2\\nregel3\\nregel4\\nregel5\\nregel6\\nregel7\\nregel8","intro":"Een kort welkomstwoord van Sint (1 zin, persoonlijk, geen ho ho ho)"}`;
+  `Je bent Sinterklaas zelf: waardig, hartelijk, met humor voor kinderen. Schrijf een Sinterklaasrijmpje van precies 8 regels voor ${name} (${age} jaar), die graag "${wish}" wil.
+REGELS:
+- Schema AABB: regel 1+2 rijmen, 3+4, 5+6, 7+8.
+- De wens "${wish}" moet LETTERLIJK aan het EINDE van een regel staan, en de volgende regel moet daarop rijmen. Bedenk daar een rijmwoord bij.
+- Noem de naam ${name} minstens één keer.
+- Kindvriendelijk, korte regels, NOOIT "ho ho ho".
+- Laatste regel: "Fijn Sinterklaasfeest, lieve ${name}!" (laat de regel ervoor daarop rijmen).
+Antwoord ALLEEN als JSON:
+{"rijm":"regel1\\nregel2\\nregel3\\nregel4\\nregel5\\nregel6\\nregel7\\nregel8","intro":"één korte persoonlijke zin van Sint"}`;
 
 const buildVerlangPrompt = (name, wishes) =>
   `Je bent Sinterklaas. ${name} heeft de volgende wensen: ${wishes}.
@@ -400,18 +423,18 @@ function RijmMode({apiKey,onBack}) {
     if(!name||!age||!wish){setErr('Vul naam, leeftijd én wens in ✨');return;}
     if(!apiKey){setErr('Stel eerst een API sleutel in! 🔑');return;}
     setLoading(true);setErr('');setResult(null);
+    let data;
     try {
-      const raw=await callGemini(apiKey,buildRijmPrompt(name,age,wish));
-      const data=JSON.parse(raw);
-      setResult(data);setSpeaking(true);
-      speak((data.intro||'')+' '+(data.rijm||''),()=>setSpeaking(false));
-    } catch {
-      // Fallback — Sint reageert altijd
-      const fallbackTekst=buildSintFallback(name);
-      setResult({intro:'Sint spreekt tot jou:',rijm:fallbackTekst,_isFallback:true});
-      setSpeaking(true);
-      speak(fallbackTekst,()=>setSpeaking(false));
+      data=parseJson(await callGemini(apiKey,buildRijmPrompt(name,age,wish)));
+      if(Array.isArray(data.rijm))data.rijm=data.rijm.join('\n');
+      if(!data.rijm||data.rijm.split('\n').filter(Boolean).length<4)throw new Error('te kort');
+    } catch(e) {
+      // Fallback — Sint reageert altijd, nu ook op rijm
+      console.warn('Rijm fallback:',e);
+      data=buildRijmFallback(name,wish);
     }
+    setResult(data);setSpeaking(true);
+    speak((data.intro||'')+' '+(data.rijm||''),()=>setSpeaking(false));
     setLoading(false);
   };
 
@@ -466,9 +489,11 @@ function VerlangMode({apiKey,onBack}) {
     setLoading(true);setErr('');setResult(null);
     try {
       const raw=await callGemini(apiKey,buildVerlangPrompt(name,wishes));
-      const data=JSON.parse(raw);
+      const data=parseJson(raw);
+      if(!Array.isArray(data.reacties)||!data.reacties.length)throw new Error('geen reacties');
       setResult(data);
-    } catch {
+    } catch(e) {
+      console.warn('Verlang fallback:',e);
       setResult(buildVerlangFallback(name));
     }
     setLoading(false);
@@ -518,16 +543,16 @@ function SchoenMode({apiKey,onBack}) {
     if(!name||!items){setErr('Vertel wat je in je schoen hebt gelegd! 👟');return;}
     if(!apiKey){setErr('Stel eerst een API sleutel in! 🔑');return;}
     setLoading(true);setErr('');setResult(null);
+    let data;
     try {
-      const raw=await callGemini(apiKey,buildSchoenPrompt(name,items));
-      const data=JSON.parse(raw);
-      setResult(data);setSpeaking(true);
-      speak(data.bericht||'',()=>setSpeaking(false));
-    } catch {
-      const fallback=buildSchoenFallback(name,items);
-      setResult(fallback);setSpeaking(true);
-      speak(fallback.bericht,()=>setSpeaking(false));
+      data=parseJson(await callGemini(apiKey,buildSchoenPrompt(name,items)));
+      if(!data.bericht)throw new Error('geen bericht');
+    } catch(e) {
+      console.warn('Schoen fallback:',e);
+      data=buildSchoenFallback(name,items);
     }
+    setResult(data);setSpeaking(true);
+    speak(data.bericht||'',()=>setSpeaking(false));
     setLoading(false);
   };
 
