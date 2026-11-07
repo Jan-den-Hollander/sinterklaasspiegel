@@ -1,4 +1,4 @@
 export const metadata = {
-  title: "Specchio Magico",
-  description: "Impara il tedesco con il tuo specchio magico",
+  title: "Sinterklaas Spiegel",
+  description: "Een magische spiegel met Sint: rijmpjes, verlanglijstje, schoen zetten en een quiz.",
 };
